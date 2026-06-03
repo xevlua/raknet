@@ -786,14 +786,32 @@ local function updateOpcodeStats(packet)
     Store.lastByOpcode[id] = packet
 end
 
-local Capture
-repeat
-    Capture = raknet.Capture
-    task.wait()
-until Capture and Capture.Connect
-Capture:Connect(function(packet)
-    updateOpcodeStats(packet)
-    pushHistory(packet)
+local function waitForCapture(timeout)
+    timeout = timeout or 5
+    local t0 = os.clock()
+
+    while os.clock() - t0 < timeout do
+        if raknet.Capture and type(raknet.Capture.Connect) == "function" then
+            return raknet.Capture
+        end
+        task.wait()
+    end
+
+    return nil
+end
+
+task.spawn(function()
+    local Capture = waitForCapture(5)
+
+    if not Capture then
+        warn("[wpm] err:82")
+        return
+    end
+
+    Capture:Connect(function(packet)
+        updateOpcodeStats(packet)
+        pushHistory(packet)
+    end)
 end)
 
 -- public API
