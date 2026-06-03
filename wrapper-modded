@@ -786,7 +786,12 @@ local function updateOpcodeStats(packet)
     Store.lastByOpcode[id] = packet
 end
 
-raknet.Capture:Connect(function(packet)
+local Capture
+repeat
+    Capture = raknet.Capture
+    task.wait()
+until Capture and Capture.Connect
+Capture:Connect(function(packet)
     updateOpcodeStats(packet)
     pushHistory(packet)
 end)
