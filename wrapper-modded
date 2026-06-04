@@ -682,8 +682,7 @@ local Store = {
     maxHistory = 300,
 }
 
--- byte helpers
-
+--// byte helpers
 local function readU32(b, i)
     return (b[i] or 0)
         + (b[i+1] or 0) * 256
@@ -701,14 +700,27 @@ local function readF32(b, i)
         )
         return buffer.readf32(buffer.fromstring(bytes), 0)
     end)
-
     if ok then return res end
 end
 
--- scan packet (sstructure)
+local function isGoodString(s)
+    if not s then return false end
+    if #s < 5 then return false end
+    if #s > 120 then return false end
 
+    -- must contain at least 2 letters or be path-like
+    local letters = #s:gsub("[^A-Za-z]", "")
+    if letters < 2 then return false end
+
+    -- no garbage byte noise
+    if s:find("[\0\t\r\n]") then return false end
+
+    return true
+end
+
+--// scan packet
 function Analyzer.scan(packet)
-    local b = packet.data
+    local b = packet.data or {}
 
     local floats = {}
     local ints = {}
@@ -716,46 +728,39 @@ function Analyzer.scan(packet)
 
     for i = 2, #b - 3 do
         local f = readF32(b, i)
-
-        if f
-        and f == f
-        and math.abs(f) > 0.00001
-        and math.abs(f) < 100000 then
-
+        if f and f == f and math.abs(f) < 1e6 then
             floats[#floats + 1] = {i, f}
         end
 
         local u = readU32(b, i)
-
-        if u > 0 and u < 100000000 then
+        if u > 0 and u < 1e9 then
             ints[#ints + 1] = {i, u}
         end
     end
 
-    -- string extraction
-    do
-        local buf = {}
+    local buf = {}
 
-        local function flush()
-            if #buf >= 4 then
-                strings[#strings + 1] =
-                    string.char(table.unpack(buf))
-            end
-            table.clear(buf)
-        end
-
-        for i = 1, #b do
-            local c = b[i]
-
-            if c >= 32 and c <= 126 then
-                buf[#buf + 1] = c
-            else
-                flush()
+    local function flush()
+        if #buf >= 5 then
+            local s = string.char(table.unpack(buf))
+            if isGoodString(s) then
+                strings[#strings + 1] = s
             end
         end
-
-        flush()
+        table.clear(buf)
     end
+
+    for i = 1, #b do
+        local c = b[i]
+
+        if c >= 32 and c <= 126 then
+            buf[#buf + 1] = c
+        else
+            flush()
+        end
+    end
+
+    flush()
 
     return {
         id = packet.id,
@@ -766,35 +771,32 @@ function Analyzer.scan(packet)
     }
 end
 
--- classify packet behavior
-
+--// classification (less wrong labels yes)
 function Analyzer.classify(packet)
     local s = Analyzer.scan(packet)
 
-    if #s.strings > 0 then
-        return "text/metadata"
+    if #s.strings >= 2 and #s.strings[1] > 10 then
+        return "ui/metadata"
     end
 
-    if #s.floats >= 6 then
-        return "movement/transform-like"
+    if #s.floats >= 8 then
+        return "movement/state"
     end
 
-    if packet.size >= 100 then
-        return "large replication/state sync"
+    if packet.size > 200 then
+        return "replication/heavy"
     end
 
-    if packet.size <= 20 then
-        return "small event/control"
+    if packet.size < 25 then
+        return "control/event"
     end
 
     return "unknown"
 end
 
--- internal store update
-
+--// store helpers
 local function pushHistory(packet)
     Store.history[#Store.history + 1] = packet
-
     if #Store.history > Store.maxHistory then
         table.remove(Store.history, 1)
     end
@@ -823,6 +825,26 @@ local function updateOpcodeStats(packet)
 
     Store.lastByOpcode[id] = packet
 end
+
+--// expose
+getgenv().PacketAnalyzer = {
+    scan = Analyzer.scan,
+    classify = Analyzer.classify,
+    getHistory = function(limit)
+        local out = {}
+        local start = math.max(1, #Store.history - (limit or #Store.history) + 1)
+        for i = start, #Store.history do
+            out[#out + 1] = Store.history[i]
+        end
+        return out
+    end,
+    getOpcodeStats = function()
+        return Store.byOpcode
+    end,
+    getLastOpcode = function(id)
+        return Store.lastByOpcode[id]
+    end,
+}
 
 local function waitForCapture(timeout)
     timeout = timeout or 5
