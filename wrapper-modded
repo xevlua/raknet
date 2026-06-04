@@ -918,59 +918,38 @@ local function classifyPacket(scan, strings)
     return "unknown"
 end
 
-task.spawn(function()
-    local Capture = waitForCapture(5)
+-- have you ever eaten a coconut
 
-    if not Capture then
-        warn("[wpm] err:82")
-        return
-    end
+task.defer(function()
 
-    local conn = Capture:Connect(function(packet)
+    local Capture = nil
 
-        local bytes = packet.data or {}
+    repeat
+        Capture = raknet.Capture
+        task.wait()
+    until Capture and Capture.Connect
 
-        sessions.raw[#sessions.raw + 1] = rak.packettostring(packet)
-
-        local scan = Analyzer.scan(packet)
-
-        local strings = extractStrings(bytes)
-        local vectorHints = detectVectorHints(scan.floats)
-
-        local class = classifyPacket(scan, strings)
-
-        sessions.structured[#sessions.structured + 1] = {
-            id = packet.id,
-            size = packet.size,
-
-            class = class,
-
-            floats = scan.floats,
-            ints = scan.ints,
-            strings = strings,
-
-            vectorHints = vectorHints,
-
-            hex = rak.tohex(bytes),
-        }
-
+    Capture:Connect(function(packet)
+        updateOpcodeStats(packet)
+        pushHistory(packet)
     end)
+
 end)
 
 -- public API
 
 getgenv().PacketAnalyzer = {
 
-    -- full scan of packet
     scan = Analyzer.scan,
 
-    -- classification string
     classify = Analyzer.classify,
 
-    -- full stored history
     getHistory = function(limit)
         local out = {}
-        local start = math.max(1, #Store.history - (limit or #Store.history) + 1)
+        local start = math.max(
+            1,
+            #Store.history - (limit or #Store.history) + 1
+        )
 
         for i = start, #Store.history do
             out[#out + 1] = Store.history[i]
@@ -979,20 +958,19 @@ getgenv().PacketAnalyzer = {
         return out
     end,
 
-    -- stats per opcode
     getOpcodeStats = function()
         return Store.byOpcode
     end,
 
-    -- last packet of opcode
     getLastOpcode = function(id)
         return Store.lastByOpcode[id]
     end,
 
-    -- summary
     summary = function(id)
         local s = Store.byOpcode[id]
-        if not s then return nil end
+        if not s then
+            return nil
+        end
 
         return {
             count = s.count,
@@ -1003,6 +981,7 @@ getgenv().PacketAnalyzer = {
 }
 
 raknet.Capture = setmetatable({}, Capture)
+
 getgenv().raknet = raknet
 getgenv().rnet = raknet
 
